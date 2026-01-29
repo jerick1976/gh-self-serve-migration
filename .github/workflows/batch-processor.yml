@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       max-parallel: 10
     timeout-minutes: 50400
-    
+
     env:
       TARGET_ORG: ${{ github.event.client_payload.batch.targetOrganization }}
       SOURCE_ORG: ${{ github.event.client_payload.batch.sourceOrganization }}
@@ -37,7 +37,7 @@ jobs:
       # Pass all tokens for dynamic resolution
       GHEC_CLOUD_TOKEN: ${{ secrets.GHEC_CLOUD_TOKEN }}
       GHES_PROD_TOKEN: ${{ secrets.GHES_PROD_TOKEN }}
-      GHEC_EMU_TOKEN: ${{ secrets.GHEC_EMU_TOKEN }}    
+      GHEC_EMU_TOKEN: ${{ secrets.GHEC_EMU_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -78,6 +78,9 @@ jobs:
 
       - name: Install GEI prerequisites
         if: env.INSTALL_PREREQS == 'true'
+        env:
+          GH_TOKEN: ${{ steps.resolve-tokens.outputs.target_token }}
+          GH_PAT: ${{ steps.resolve-tokens.outputs.target_token }}
         run: |
           sudo apt-get update && sudo apt-get install -y \
             git unzip curl wget apt-transport-https software-properties-common
@@ -86,7 +89,7 @@ jobs:
             wget -q https://github.com/github/gh-gei/releases/latest/download/gei-linux-amd64
             sudo install --owner root --group root --mode 755 gei-linux-amd64 /usr/local/bin/gei
           fi
-          
+
           echo "GEI Version: $(gei --version)"
 
       - name: Execute GEI migration for ${{ matrix.repository }}
@@ -101,17 +104,17 @@ jobs:
             "--batch-number" "$BATCH_NUMBER"
             "--total-batches" "$TOTAL_BATCHES"
           )
-          
+
           # Add lock flag for production migrations
           if [[ "$MIGRATION_TYPE" == "production" ]]; then
             ARGS+=("--lock-source-repo")
           fi
-          
+
           # Skip releases if pre-cached (meaning they'll be migrated separately)
           if [[ "${{ steps.check-releases.outputs.has_releases }}" == "true" ]]; then
             ARGS+=("--skip-releases")
           fi
-          
+
           node "${ARGS[@]}"
         env:
           GH_PAT: ${{ steps.resolve-tokens.outputs.target_token }}
@@ -120,10 +123,12 @@ jobs:
       - name: Detect features requiring additional migration steps
         id: migration-checks
         env:
-          LOCAL_CACHE_DIR: ${{ vars.LOCAL_CACHE_DIR || '/opt/migration' }}                           
+          LOCAL_CACHE_DIR: ${{ vars.LOCAL_CACHE_DIR || '/opt/migration' }}
         run: |
           # Check and collect secrets
-          SECRETS_JSON=$(GH_TOKEN="${{ steps.resolve-tokens.outputs.source_token }}" gh secret list \
+          SECRETS_JSON=$(GH_TOKEN="${{ steps.resolve-tokens.outputs.source_token }}" \
+            GH_PAT="${{ steps.resolve-tokens.outputs.source_token }}" \
+            gh secret list \
             --repo "${{ steps.repo-info.outputs.path }}" \
             --json name,updatedAt 2>/dev/null || echo "[]")
 
@@ -137,7 +142,9 @@ jobs:
           fi
 
           # Check and collect variables
-          VARIABLES_JSON=$(GH_TOKEN="${{ steps.resolve-tokens.outputs.source_token }}" gh variable list \
+          VARIABLES_JSON=$(GH_TOKEN="${{ steps.resolve-tokens.outputs.source_token }}" \
+            GH_PAT="${{ steps.resolve-tokens.outputs.source_token }}" \
+            gh variable list \
             --repo "${{ steps.repo-info.outputs.path }}" \
             --json name,value 2>/dev/null || echo "[]")
 
@@ -156,7 +163,7 @@ jobs:
           else
             echo "lfs=false" >> $GITHUB_OUTPUT
           fi
-          
+
           # Check packages
           if cat $LOCAL_CACHE_DIR/packages/export/*/*.csv  | tail -n+2 | cut -d, -f2 | sort -u | grep -q "${{ steps.repo-info.outputs.name }}"; then
             echo "packages=true" >> $GITHUB_OUTPUT
@@ -170,7 +177,7 @@ jobs:
           else
             echo "environments=false" >> $GITHUB_OUTPUT
           fi
-          
+
       - name: Trigger variables and secrets migration
         if: steps.migration-checks.outputs.has_variables == 'true' || steps.migration-checks.outputs.has_secrets == 'true'
         uses: benc-uk/workflow-dispatch@v1
@@ -254,6 +261,8 @@ jobs:
       - name: Map mannequin users to real accounts
         if: hashFiles('user-mappings-gei.csv') != ''
         continue-on-error: true
+        env:
+          GH_PAT: ${{ steps.resolve-tokens.outputs.target_token }}
         run: |
           gei reclaim-mannequin \
             --csv user-mappings-gei.csv \
@@ -266,7 +275,7 @@ jobs:
           # Create status file
           STATUS_FILE="${{ steps.repo-info.outputs.name }}.txt"
           echo "${{ matrix.repository }}, ${{ job.status }}" > "$STATUS_FILE"
-          
+
           # Also add to job summary for easy viewing
           echo "| ${{ matrix.repository }} | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
 
